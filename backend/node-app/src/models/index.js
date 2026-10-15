@@ -2,16 +2,19 @@
 // Keeping them in one file keeps the module graph small and easy to defend
 // during the interview. Each schema uses human-readable IDs (slugs) in addition
 // to Mongo's _id.
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
-const ProductSchema = new Schema({
-  sku: { type: String, required: true, unique: true },
-  name: { type: String, required: true },
-  category: String,
-  unitPrice: { type: Number, required: true },
-  storageUnitsPerPallet: { type: Number, default: 50 },
-}, { timestamps: true });
+const ProductSchema = new Schema(
+  {
+    sku: { type: String, required: true, unique: true },
+    name: { type: String, required: true },
+    category: String,
+    unitPrice: { type: Number, required: true },
+    storageUnitsPerPallet: { type: Number, default: 50 },
+  },
+  { timestamps: true },
+);
 
 const InventorySchema = new Schema({
   sku: { type: String, required: true },
@@ -56,67 +59,98 @@ const StorageCapacitySchema = new Schema({
   usedPallets: { type: Number, default: 0 },
 });
 
-const PurchaseOrderItemSchema = new Schema({
-  sku: String,
-  quantity: Number,
-  unitPrice: Number,
-}, { _id: false });
-
-const PurchaseOrderSchema = new Schema({
-  poId: { type: String, required: true, unique: true },
-  supplierId: String,
-  locationId: String,
-  items: [PurchaseOrderItemSchema],
-  totalCost: Number,
-  status: {
-    type: String,
-    enum: ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SUBMITTED', 'REJECTED', 'FAILED'],
-    default: 'DRAFT',
+const PurchaseOrderItemSchema = new Schema(
+  {
+    sku: String,
+    quantity: Number,
+    unitPrice: Number,
   },
-  expectedArrival: Date,
-  createdBy: String,
-  approvedBy: String,
-  rejectedBy: String,
-  committedAt: Date,
-  // When set, this PO is expected incoming inventory (for the inventory calc)
-  isIncoming: { type: Boolean, default: true },
-}, { timestamps: true });
+  { _id: false },
+);
 
-const AgentRunSchema = new Schema({
-  runId: { type: String, required: true, unique: true },
-  input: Schema.Types.Mixed, // product, locationId, recommendedQty
-  decision: {
-    type: String,
-    enum: ['ACCEPT', 'MODIFY', 'REJECT', 'INVESTIGATE', 'ERROR'],
+const PurchaseOrderSchema = new Schema(
+  {
+    poId: { type: String, required: true, unique: true },
+    supplierId: String,
+    locationId: String,
+    items: [PurchaseOrderItemSchema],
+    totalCost: Number,
+    status: {
+      type: String,
+      enum: [
+        "DRAFT",
+        "PENDING_APPROVAL",
+        "APPROVED",
+        "SUBMITTED",
+        "REJECTED",
+        "FAILED",
+      ],
+      default: "DRAFT",
+    },
+    expectedArrival: Date,
+    createdBy: String,
+    approvedBy: String,
+    rejectedBy: String,
+    committedAt: Date,
+    // When set, this PO is expected incoming inventory (for the inventory calc)
+    isIncoming: { type: Boolean, default: true },
   },
-  recommendedQty: Number,
-  evidence: Schema.Types.Mixed,
-  checks: [new Schema({ name: String, passed: Boolean, detail: String, metric: Schema.Types.Mixed }, { _id: false })],
-  calculations: Schema.Types.Mixed,
-  missingInfo: [String],
-  warnings: [String],
-  nextAction: String,
-  llmUsed: { type: Boolean, default: false },
-  llmModel: String,
-  llmProposedDecision: String,
-  llmProposedQty: Number,
-  llmAgreed: Boolean,
-  llmError: String,
-  toolCalls: [new Schema({
-    name: String,
-    by: String,
-    args: Schema.Types.Mixed,
-    result: Schema.Types.Mixed,
-    error: String,
-    at: { type: Date, default: Date.now },
-  }, { _id: false })],
-  draftPoId: String,
-  explanation: String,
-}, { timestamps: true });
+  { timestamps: true },
+);
+
+const AgentRunSchema = new Schema(
+  {
+    runId: { type: String, required: true, unique: true },
+    input: Schema.Types.Mixed, // product, locationId, recommendedQty
+    decision: {
+      type: String,
+      enum: ["ACCEPT", "MODIFY", "REJECT", "INVESTIGATE", "ERROR"],
+    },
+    recommendedQty: Number,
+    evidence: Schema.Types.Mixed,
+    checks: [
+      new Schema(
+        {
+          name: String,
+          passed: Boolean,
+          detail: String,
+          metric: Schema.Types.Mixed,
+        },
+        { _id: false },
+      ),
+    ],
+    calculations: Schema.Types.Mixed,
+    missingInfo: [String],
+    warnings: [String],
+    nextAction: String,
+    llmUsed: { type: Boolean, default: false },
+    llmModel: String,
+    llmProposedDecision: String,
+    llmProposedQty: Number,
+    llmAgreed: Boolean,
+    llmError: String,
+    toolCalls: [
+      new Schema(
+        {
+          name: String,
+          by: String,
+          args: Schema.Types.Mixed,
+          result: Schema.Types.Mixed,
+          error: String,
+          at: { type: Date, default: Date.now },
+        },
+        { _id: false },
+      ),
+    ],
+    draftPoId: String,
+    explanation: String,
+  },
+  { timestamps: true },
+);
 
 const ApprovalSchema = new Schema({
   poId: String,
-  action: { type: String, enum: ['APPROVE', 'REJECT'] },
+  action: { type: String, enum: ["APPROVE", "REJECT"] },
   actor: String,
   reason: String,
   at: { type: Date, default: Date.now },
@@ -125,7 +159,18 @@ const ApprovalSchema = new Schema({
 const ValidationSchema = new Schema({
   poId: String,
   passed: Boolean,
-  checks: [new Schema({ name: String, passed: Boolean, expected: Schema.Types.Mixed, actual: Schema.Types.Mixed, detail: String }, { _id: false })],
+  checks: [
+    new Schema(
+      {
+        name: String,
+        passed: Boolean,
+        expected: Schema.Types.Mixed,
+        actual: Schema.Types.Mixed,
+        detail: String,
+      },
+      { _id: false },
+    ),
+  ],
   at: { type: Date, default: Date.now },
 });
 
@@ -136,17 +181,17 @@ const AuditEventSchema = new Schema({
 });
 
 const Models = {
-  Product: mongoose.model('Product', ProductSchema),
-  Inventory: mongoose.model('Inventory', InventorySchema),
-  DemandForecast: mongoose.model('DemandForecast', DemandForecastSchema),
-  Supplier: mongoose.model('Supplier', SupplierSchema),
-  Budget: mongoose.model('Budget', BudgetSchema),
-  StorageCapacity: mongoose.model('StorageCapacity', StorageCapacitySchema),
-  PurchaseOrder: mongoose.model('PurchaseOrder', PurchaseOrderSchema),
-  AgentRun: mongoose.model('AgentRun', AgentRunSchema),
-  Approval: mongoose.model('Approval', ApprovalSchema),
-  Validation: mongoose.model('Validation', ValidationSchema),
-  AuditEvent: mongoose.model('AuditEvent', AuditEventSchema),
+  Product: mongoose.model("Product", ProductSchema),
+  Inventory: mongoose.model("Inventory", InventorySchema),
+  DemandForecast: mongoose.model("DemandForecast", DemandForecastSchema),
+  Supplier: mongoose.model("Supplier", SupplierSchema),
+  Budget: mongoose.model("Budget", BudgetSchema),
+  StorageCapacity: mongoose.model("StorageCapacity", StorageCapacitySchema),
+  PurchaseOrder: mongoose.model("PurchaseOrder", PurchaseOrderSchema),
+  AgentRun: mongoose.model("AgentRun", AgentRunSchema),
+  Approval: mongoose.model("Approval", ApprovalSchema),
+  Validation: mongoose.model("Validation", ValidationSchema),
+  AuditEvent: mongoose.model("AuditEvent", AuditEventSchema),
 };
 
 module.exports = Models;
