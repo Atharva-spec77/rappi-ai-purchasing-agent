@@ -1,31 +1,16 @@
-// Deterministic purchasing calculations and decision engine.
-// These functions are PURE where possible so they can be tested in isolation
-// without a database. They are the source of truth for all purchasing math;
-// Gemini is never allowed to invent numbers — it only explains them.
-
 const DEFAULT_HORIZON_DAYS = 30;
 
-/**
- * Inventory Position = On-Hand - Reserved + Eligible Incoming - Open Commitments
- * Eligible incoming = SUBMITTED / APPROVED purchase orders that arrive within the
- * planning horizon. We treat `reserved` as already-committed demand so it is
- * subtracted from on-hand (never double-counted against incoming).
- */
+// Inventory Position = On-Hand - Reserved + Eligible Incoming.
 function inventoryPosition({ onHand, reserved, incomingWithinHorizon }) {
   return (onHand || 0) - (reserved || 0) + (incomingWithinHorizon || 0);
 }
 
-/**
- * Target Stock = Forecast Demand + Safety Stock.
- */
+// Target Stock = Forecast Demand + Safety Stock.
 function targetStock({ expectedDemand, safetyStock }) {
   return (expectedDemand || 0) + (safetyStock || 0);
 }
 
-/**
- * Required Additional Qty = max(0, Target - Inventory Position).
- * Rounded up to supplier order multiple and clamped to minOrderQty.
- */
+// Required quantity rounded up to the supplier's order multiple.
 function requiredQuantity({
   target,
   position,
@@ -34,15 +19,13 @@ function requiredQuantity({
 }) {
   const raw = Math.max(0, target - position);
   if (raw === 0) return 0;
+
   const multiple = Math.max(1, orderMultiple);
   const rounded = Math.ceil(raw / multiple) * multiple;
+
   return Math.max(rounded, minOrderQty || 1);
 }
 
-/**
- * Run every check and return per-check result + aggregated decision.
- * All thresholds live here, not in the LLM.
- */
 function evaluate({ context, recommendedQty }) {
   const {
     product,
@@ -56,6 +39,7 @@ function evaluate({ context, recommendedQty }) {
   } = context;
 
   const missingInfo = [];
+
   if (!product) missingInfo.push("product");
   if (!inventory) missingInfo.push("inventory");
   if (!forecast) missingInfo.push("demandForecast");
@@ -83,19 +67,32 @@ function evaluate({ context, recommendedQty }) {
     };
   }
 
+  // Count only incoming POs that are eligible and due within the horizon.
+  const now = new Date();
+  const horizonEnd = new Date(
+    now.getTime() + horizonDays * 24 * 60 * 60 * 1000,
+  );
+
+  const eligibleStatuses = new Set(["APPROVED", "SUBMITTED"]);
+
   const incomingWithinHorizon = (openPos || [])
-    .filter(
-      (po) =>
-        po.isIncoming !== false &&
-        po.status !== "REJECTED" &&
-        po.status !== "FAILED",
-    )
+    .filter((po) => {
+      if (po.isIncoming === false) return false;
+      if (!eligibleStatuses.has(po.status)) return false;
+      if (!po.expectedArrival) return false;
+
+      const arrivalDate = new Date(po.expectedArrival);
+
+      if (Number.isNaN(arrivalDate.getTime())) return false;
+
+      return arrivalDate >= now && arrivalDate <= horizonEnd;
+    })
     .reduce(
       (sum, po) =>
         sum +
         (po.items || [])
-          .filter((i) => i.sku === product.sku)
-          .reduce((s, i) => s + (i.quantity || 0), 0),
+          .filter((item) => item.sku === product.sku)
+          .reduce((itemSum, item) => itemSum + (item.quantity || 0), 0),
       0,
     );
 
@@ -104,10 +101,12 @@ function evaluate({ context, recommendedQty }) {
     reserved: inventory.reserved,
     incomingWithinHorizon,
   });
+
   const target = targetStock({
     expectedDemand: forecast.expectedUnits,
     safetyStock: inventory.safetyStock,
   });
+
   const required = requiredQuantity({
     target,
     position,
@@ -119,20 +118,24 @@ function evaluate({ context, recommendedQty }) {
   const proposedCost = (recommendedQty || 0) * unitPrice;
   const requiredCost = required * unitPrice;
 
-  // Storage: compute pallets used by proposed qty.
+  // Storage constraints.
   const unitsPerPallet = Math.max(1, product.storageUnitsPerPallet || 50);
+
   const palletsProposed = Math.ceil((recommendedQty || 0) / unitsPerPallet);
+
   const palletsAvailable =
     (storage.totalPallets || 0) - (storage.usedPallets || 0);
+
   const palletsRequired = Math.ceil(required / unitsPerPallet);
 
-  // Budget remaining.
+  // Budget constraints.
   const budgetRemaining = (budget.totalBudget || 0) - (budget.committed || 0);
 
   const checks = [];
 
-  // 1. Purchase necessary?
+  // 1. Is a purchase necessary?
   const necessary = required > 0;
+
   checks.push({
     name: "inventory",
     passed: necessary,
@@ -148,10 +151,11 @@ function evaluate({ context, recommendedQty }) {
     },
   });
 
-  // 2. Existing orders already cover demand?
+  // 2. Do eligible incoming orders already cover demand?
   const existingCovers =
     incomingWithinHorizon >=
     Math.max(0, target - (inventory.onHand - inventory.reserved));
+
   checks.push({
     name: "existing-orders",
     passed: !existingCovers,
@@ -165,14 +169,16 @@ function evaluate({ context, recommendedQty }) {
     },
   });
 
-  // 3. Demand forecast present and fresh.
+  // 3. Is the demand forecast fresh?
   const forecastAgeDays = forecast.generatedAt
     ? Math.floor(
         (Date.now() - new Date(forecast.generatedAt).getTime()) /
           (1000 * 60 * 60 * 24),
       )
     : null;
+
   const forecastFresh = forecastAgeDays === null || forecastAgeDays <= 14;
+
   checks.push({
     name: "demand",
     passed: forecastFresh,
@@ -187,11 +193,13 @@ function evaluate({ context, recommendedQty }) {
     },
   });
 
-  // 4. Supplier can fulfil & MOQ satisfied.
+  // 4. Supplier availability, MOQ and order multiple.
   const supplierOk = supplier.available === true;
   const moqOk = (recommendedQty || 0) >= (supplier.minOrderQty || 1);
+
   const multipleOk =
     (recommendedQty || 0) % Math.max(1, supplier.orderMultiple || 1) === 0;
+
   checks.push({
     name: "supplier",
     passed: supplierOk && moqOk && multipleOk,
@@ -212,6 +220,7 @@ function evaluate({ context, recommendedQty }) {
 
   // 5. Budget check.
   const budgetOk = proposedCost <= budgetRemaining;
+
   checks.push({
     name: "budget",
     passed: budgetOk,
@@ -229,6 +238,7 @@ function evaluate({ context, recommendedQty }) {
 
   // 6. Storage check.
   const storageOk = palletsProposed <= palletsAvailable;
+
   checks.push({
     name: "storage",
     passed: storageOk,
@@ -243,10 +253,11 @@ function evaluate({ context, recommendedQty }) {
     },
   });
 
-  // Decision resolution.
+  // Resolve the final purchasing decision.
   let decision;
   let nextAction;
   let finalQty = recommendedQty;
+
   const warnings = [];
 
   if (!necessary) {
@@ -263,50 +274,72 @@ function evaluate({ context, recommendedQty }) {
     nextAction =
       "Confirm supplier availability or choose an alternate supplier.";
   } else {
-    // Compute a feasible alternative that satisfies MOQ, multiples, budget and storage.
+    // Find a feasible quantity within budget, storage and supplier constraints.
     const palletFeasible = Math.max(0, palletsAvailable) * unitsPerPallet;
+
     const budgetFeasible =
       unitPrice > 0 ? Math.floor(budgetRemaining / unitPrice) : required;
+
     let feasible = Math.min(required, palletFeasible, budgetFeasible);
+
     const mult = Math.max(1, supplier.orderMultiple || 1);
+
     feasible = Math.floor(feasible / mult) * mult;
-    if (feasible < (supplier.minOrderQty || 0)) feasible = 0;
+
+    if (feasible < (supplier.minOrderQty || 0)) {
+      feasible = 0;
+    }
 
     const qtyMatchesRequired = recommendedQty === required;
+
     const quantityAppropriate =
       recommendedQty <= required * 1.1 && recommendedQty >= required * 0.9;
 
     if (budgetOk && storageOk && moqOk && multipleOk && quantityAppropriate) {
       decision = "ACCEPT";
       finalQty = recommendedQty;
+
       nextAction = "Create a draft purchase order and request buyer approval.";
-      if (!qtyMatchesRequired)
+
+      if (!qtyMatchesRequired) {
         warnings.push(
           `Recommended ${recommendedQty} is within ±10% of calculated ${required}.`,
         );
+      }
     } else if (feasible > 0) {
       decision = "MODIFY";
       finalQty = feasible;
+
       nextAction = `Reduce quantity to ${feasible} units to satisfy budget/storage/MOQ constraints.`;
-      if (!budgetOk)
+
+      if (!budgetOk) {
         warnings.push(
           `Original quantity exceeds budget by $${(proposedCost - budgetRemaining).toFixed(2)}.`,
         );
-      if (!storageOk)
+      }
+
+      if (!storageOk) {
         warnings.push(
           `Original quantity exceeds storage by ${palletsProposed - palletsAvailable} pallets.`,
         );
-      if (!moqOk)
+      }
+
+      if (!moqOk) {
         warnings.push(`Original quantity below MOQ ${supplier.minOrderQty}.`);
-      if (!multipleOk)
+      }
+
+      if (!multipleOk) {
         warnings.push(
           `Original quantity not a multiple of ${supplier.orderMultiple}.`,
         );
+      }
     } else {
       decision = "INVESTIGATE";
       finalQty = null;
+
       nextAction =
         "No feasible quantity satisfies budget, storage and MOQ at once — escalate.";
+
       warnings.push(
         "No safe alternative quantity exists under current constraints.",
       );
