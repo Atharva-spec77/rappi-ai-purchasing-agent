@@ -248,7 +248,7 @@ cd backend/node-app
 npm test
 ```
 
-The backend test suite previously completed with **29 passing tests**. Run the command again to verify the current version of the code.
+The backend test suite currently passes **33 tests across 3 test suites**. Run the command below to verify the current version of the code.
 
 ---
 
